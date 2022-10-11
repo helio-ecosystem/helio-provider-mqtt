@@ -1,4 +1,4 @@
-# helio-provider-mqtt
+# helio-providers-mqtt
 
 This provider allows to recover data from a MQTT device
 
@@ -23,6 +23,6 @@ The configuration information that can be passed to this provider are the follow
  * `username` The username to be identified by the MQTT device.
  * `password` The password to be identified by the MQTT device.
  * `registerTopic` A JSON Array that contains the following:
- ** `name` The name of the action to be register.
- ** `topic` The topic to be susbribe.
+    ** `name` The name of the action to be register.
+    ** `topic` The topic to be susbribe.
 
