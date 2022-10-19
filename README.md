@@ -6,13 +6,11 @@ This provider allows to recover data from a MQTT device
 ### MqttProvider
 
 ````json
-
-
 {
-    "source" : "https://github.com/helio-ecosystem/helio-providers-mqtt/releases/download/v0.1.1/helio-providers-mqtt-0.1.1.jar",
+    "source": "https://github.com/helio-ecosystem/helio-provider-mqtt/releases/download/v0.1.1/helio-provider-mqtt-0.1.1.jar",
     "clazz": "helio.providers.MqttProvider",
     "type": "PROVIDER"
-  }
+ }
 ````
 
 The configuration information that can be passed to this provider are the following fields:
