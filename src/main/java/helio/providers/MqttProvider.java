@@ -1,129 +1,143 @@
 package helio.providers;
 
-import java.io.File;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Set;
+import java.util.Arrays;
 import java.util.UUID;
 
+import org.eclipse.paho.client.mqttv3.MqttClient;
+import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 import org.eclipse.paho.client.mqttv3.MqttException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
-import com.google.gson.JsonSyntaxException;
 
-import actions.Helio;
-import actions.mqtt.MqttConfiguration;
-import actions.routes.Action;
-import actions.routes.Routes;
-import actions.utils.Tokens;
 import helio.blueprints.AsyncDataProvider;
 import io.reactivex.rxjava3.annotations.NonNull;
-import io.reactivex.rxjava3.core.BackpressureStrategy;
-import io.reactivex.rxjava3.core.Flowable;
 import io.reactivex.rxjava3.core.FlowableEmitter;
 
-public class MqttProvider implements AsyncDataProvider{
+public class MqttProvider implements AsyncDataProvider {
 
-	private static FlowableEmitter<@NonNull String> temporalEmitter;
-	private static boolean include_topic = false;
-	private static final Gson GSON = new Gson();
-	private String url;
-	private String id = UUID.randomUUID().toString();
+	// -- Attributes
 
+	public static Logger logger = LoggerFactory.getLogger(MqttProvider.class);
+	// ---- MQTT objects
+	private SubscriberCallback subscriber;
+	private MqttClient client;
+	// ---- Connection attributes
+	private String brokerAddress; // configurable
+	
+	private String clientId; // Auto-generated
+
+	// -- Constructor
+
+	/**
+	 * Constructor
+	 */
+	public MqttProvider() {
+		super();
+		UUID uuid = UUID.randomUUID();
+		clientId = "HelioMqttProvider-" + uuid.toString();
+		subscriber = new SubscriberCallback();
+	}	
+
+	// -- Configuration methods
+
+	private static final String ADDRESS_TOKEN = "url";
+	private static final String ID_TOKEN = "id";
+	private static final String USERNAME_TOKEN = "username";
+	private static final String PASSWORD_TOKEN = "password";
+	private static final String TOPICS_TOKEN = "topics";
+	private static final String TOPICS_INCLUDE_TOKEN = "include_topic";
+	private static final String CAST_TOKEN = "cast_json";
 	@Override
 	public void configure(JsonObject configuration) {
-		// TODO Auto-generated method stub
-		if(!configuration.has(Tokens.URL) || !configuration.has(Tokens.REGISTERTOPIC)) {
-			throw new IllegalArgumentException("The MqttProvider needs to receive non empty value for 'url' or 'registerTopic'");
+		if (configuration.has(ADDRESS_TOKEN)) {
+			this.brokerAddress = configuration.get(ADDRESS_TOKEN).getAsString();
+			if (configuration.has(TOPICS_TOKEN)) {
+				JsonArray topicsArray = configuration.get(TOPICS_TOKEN).getAsJsonArray();
+				Gson gson = new Gson();
+				this.subscriber.getTopics().addAll(Arrays.asList(gson.fromJson(topicsArray, String[].class)));
+				if (configuration.has(ID_TOKEN))
+					this.clientId = configuration.get(ID_TOKEN).getAsString();
+				if (configuration.has(TOPICS_INCLUDE_TOKEN))
+					this.subscriber.setIncludeTopics(configuration.get(TOPICS_INCLUDE_TOKEN).getAsBoolean());
+				if (configuration.has(CAST_TOKEN))
+					this.subscriber.setCastJson(configuration.get(CAST_TOKEN).getAsBoolean());
+				
+				String username = null;
+				String password = null;
+				if (configuration.has(USERNAME_TOKEN))
+					username = configuration.get(USERNAME_TOKEN).getAsString();
+				if (configuration.has(PASSWORD_TOKEN))
+					password = configuration.get(PASSWORD_TOKEN).getAsString();
+				if( (username==null && password!=null) || (username!=null && password==null))
+					throw new IllegalArgumentException("Provide a JSON configration with both 'username' and 'password'");
+				connect(username, password); // connect to the mqtt
+			} else {
+				throw new IllegalArgumentException("Provide a JSON configuration file with the key 'topics' which value is an array of strings specifying topics to subscribe");
+			}
+		} else {
+			throw new IllegalArgumentException("Provide a JSON configuration file with the key 'url' which value is a string specifying an MQTT broker address");
 		}
-		url = configuration.get(Tokens.URL).getAsString();
-		if(!configuration.get(Tokens.REGISTERTOPIC).isJsonArray()) {
-			throw new IllegalArgumentException("MqttProvider - 'registerTopic' must be an array with 'name' and 'topic'");
-		}
-		if(configuration.has(Tokens.ID)) {
-			id = configuration.get(Tokens.ID).getAsString();
-		}
-		if(configuration.has(Tokens.USERNAME) && configuration.has(Tokens.PASSWORD)) {
-			Helio.configure(MqttConfiguration.createDefault(url, id, 
-					configuration.get(Tokens.USERNAME).getAsString(),configuration.get(Tokens.PASSWORD).getAsString()));
-		}else {
-			Helio.configure(MqttConfiguration.createDefault(url, id));
-		}
-		if(configuration.has(Tokens.INCLUDETOPIC)){
-			include_topic = configuration.get(Tokens.INCLUDETOPIC).getAsBoolean();
-		}
-		JsonArray topic = configuration.get(Tokens.REGISTERTOPIC).getAsJsonArray();
-		for(int i = 0; i<topic.size();i++) {
-			Helio.register(topic.get(i).getAsJsonObject().get(Tokens.TOPICNAME).getAsString(), MqttProvider.messages, 
-					topic.get(i).getAsJsonObject().get(Tokens.TOPIC).getAsString());
-		}
-		
-//		//Flag: include_topic
-//		Helio.configure(MqttConfiguration.createDefault("tcp://mqtt.alentejo.auroral.eu:1883", "upmclient", "upm", "auroral#upm"));
-////		Helio.register("Imprimir", MqttProvider.messages, topic);
-//
-//		Helio.register("Imprimir", MqttProvider.messages, "shellies/shellymotionsensor-60A423BEC274/status");
-//		Helio.register("all", MqttProvider.messages, "shellies/");
-//		Helio.register("sensor", MqttProvider.messages, "shellies/shellymotionsensor-60A423BEC274/sensor");
 
+	}
+
+	private void connect(String username, String password) {
+		try {
+			this.client = new MqttClient(brokerAddress, clientId);
+			MqttConnectOptions opts = new MqttConnectOptions();
+			opts.setAutomaticReconnect(true);
+			opts.setCleanSession(true);
+			if(username!=null)
+				opts.setUserName(username);
+			if(password!=null)
+				opts.setPassword(password.toCharArray());
+			
+			client.setCallback(subscriber);
+			client.connect(opts);
+			this.subscriber.getTopics().forEach(topic -> {
+				try {
+					client.subscribe(topic);
+				} catch (MqttException e) {
+					e.printStackTrace();
+				}
+			});
+			logger.info("MQTT connected");
+		} catch (MqttException e) {
+			logger.error("No broker to connect was found");
+			throw new IllegalArgumentException(e.toString());
+		}
+	}
+
+	public void disconnect() {
+		try {
+			subscriber = null;
+			client.close();
+		} catch (MqttException e) {
+			logger.error(e.toString());
+		}
 	}
 
 	@Override
 	public void subscribe(@NonNull FlowableEmitter<@NonNull String> emitter) throws Throwable {
-		temporalEmitter = emitter;
-		//		emitter.onError(null); //Indicate error (i.e. is not a JSON or CSV or whatever)
-
-	}
-
-	public static boolean isValid(String json) {
-		try {
-			JsonParser.parseString(json);
-		} catch (JsonSyntaxException e) {
-			return false;
-		}
-		return true;
-	}
-
-	/**
-	 * Pass the data to subscribe
-	 * Create a JSON Array encapsulating the topic and data (optional)
-	 */
-	public static final Action messages = (Object data, String topic) -> {
-		if(temporalEmitter!=null) {
-			if(include_topic) {
-				JsonObject jsonData = new JsonObject();
-				jsonData.addProperty(Tokens.TOPIC, topic);
-				if(isValid(data.toString())) {
-					JsonElement aaa = JsonParser.parseString(data.toString());
-					if(aaa instanceof JsonObject) {
-						jsonData.add(Tokens.DATA, JsonParser.parseString(data.toString()).getAsJsonObject());
-					}else {
-						jsonData.add(Tokens.DATA, JsonParser.parseString(data.toString()).getAsJsonArray());
+		
+			while (true) {
+				try {
+					while (!SubscriberCallback.queue.isEmpty()) {
+						
+						JsonObject data = SubscriberCallback.queue.remove(0);
+						emitter.onNext(data.toString());
+						logger.info("Emitting, queue: "+ SubscriberCallback.queue.size());
 					}
-				}else {
-					jsonData.addProperty(Tokens.DATA, data.toString());
+				} catch (Exception e) {
+					e.printStackTrace();
+					emitter.onError(e);
 				}
-				temporalEmitter.onNext(jsonData.toString());
-
-			}else {
-				temporalEmitter.onNext(data.toString());
+				// TODO: PUT THIS REFRESH AS A CONFIGURABLE PARAMETER
+				Thread.sleep(500);
 			}
-		}
-		return null;
-	};
-
-//	public static void main(String[] args) throws Throwable {
-//		MqttProvider t = new MqttProvider();
-//		t.configure(null);		
-//		String blocked = Flowable.create(t, BackpressureStrategy.BUFFER).blockingFirst();
-//		System.out.println(blocked);
-//	}
-
+		
+	}
 }
