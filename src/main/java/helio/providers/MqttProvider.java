@@ -4,6 +4,7 @@ import java.util.Arrays;
 import java.util.UUID;
 
 import org.eclipse.paho.client.mqttv3.MqttClient;
+import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 import org.eclipse.paho.client.mqttv3.MqttException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -71,6 +72,8 @@ public class MqttProvider implements AsyncDataProvider {
 					username = configuration.get(USERNAME_TOKEN).getAsString();
 				if (configuration.has(PASSWORD_TOKEN))
 					password = configuration.get(PASSWORD_TOKEN).getAsString();
+				if( (username==null && password!=null) || (username!=null && password==null))
+					throw new IllegalArgumentException("Provide a JSON configration with both 'username' and 'password'");
 				connect(username, password); // connect to the mqtt
 			} else {
 				throw new IllegalArgumentException("Provide a JSON configuration file with the key 'topics' which value is an array of strings specifying topics to subscribe");
@@ -84,8 +87,16 @@ public class MqttProvider implements AsyncDataProvider {
 	private void connect(String username, String password) {
 		try {
 			this.client = new MqttClient(brokerAddress, clientId);
+			MqttConnectOptions opts = new MqttConnectOptions();
+			opts.setAutomaticReconnect(true);
+			opts.setCleanSession(true);
+			if(username!=null)
+				opts.setUserName(username);
+			if(password!=null)
+				opts.setPassword(password.toCharArray());
+			
 			client.setCallback(subscriber);
-			client.connect();
+			client.connect(opts);
 			this.subscriber.getTopics().forEach(topic -> {
 				try {
 					client.subscribe(topic);
@@ -111,19 +122,20 @@ public class MqttProvider implements AsyncDataProvider {
 
 	@Override
 	public void subscribe(@NonNull FlowableEmitter<@NonNull String> emitter) throws Throwable {
-		try {
-			while (SubscriberCallback.queue.isEmpty()) {
+		
+			while (true) {
 				try {
 					while (!SubscriberCallback.queue.isEmpty()) {
 						JsonObject data = SubscriberCallback.queue.remove(0);
 						emitter.onNext(data.toString());
 					}
 				} catch (Exception e) {
+					e.printStackTrace();
 					emitter.onError(e);
 				}
+				// TODO: PUT THIS REFRESH AS A CONFIGURABLE PARAMETER
+				Thread.sleep(500);
 			}
-		} catch (Exception e) {
-			emitter.onError(e);
-		}
+		
 	}
 }
