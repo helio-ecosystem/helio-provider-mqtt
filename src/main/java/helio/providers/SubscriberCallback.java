@@ -51,15 +51,19 @@ public class SubscriberCallback implements MqttCallback {
 	 */
 	@Override
 	public void messageArrived(String topic, MqttMessage message) throws Exception {
+		
 		if(topics.contains(topic)) {
 			JsonObject data = new JsonObject();
 			data.addProperty("topic", topic);
-			// TODO: if castJson is true  message.toString() should be transformed into JSON using GSON
+			if(castJson) {
+				// TODO: if castJson is true  message.toString() should be transformed into JSON using GSON, take into account that it could be an Array of Jsons
+			}
 			data.addProperty("data", message.toString());
 			queue.add(data);
-			
 		}
+		logger.info("Mqtt queue: "+ SubscriberCallback.queue.size());
 	}
+
 
 	
 	@Override

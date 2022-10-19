@@ -126,8 +126,10 @@ public class MqttProvider implements AsyncDataProvider {
 			while (true) {
 				try {
 					while (!SubscriberCallback.queue.isEmpty()) {
+						
 						JsonObject data = SubscriberCallback.queue.remove(0);
 						emitter.onNext(data.toString());
+						logger.info("Emitting, queue: "+ SubscriberCallback.queue.size());
 					}
 				} catch (Exception e) {
 					e.printStackTrace();
